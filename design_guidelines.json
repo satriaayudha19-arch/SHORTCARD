@@ -1,0 +1,105 @@
+{
+  "project_name": "Short Card by GlobalConnex",
+  "app_url_path": "globalconnex.id/shortcard",
+  "app_type": "hybrid_fullstack",
+  "language_ui": "Bahasa Indonesia",
+  "design_philosophy": {
+    "archetype": "SWISS & PERFORMANCE TECH HYBRID",
+    "tone": "Professional, Premium, Modern, Clean, Conversion-Oriented",
+    "mobile_first": true,
+    "core_promise": "Satu Kartu. Satu Tap. Semua Terhubung. Lifetime Garansi Link."
+  },
+  "typography": {
+    "primary_heading_font": "Cabinet Grotesk / Plus Jakarta Sans / Outfit",
+    "primary_body_font": "DM Sans / Plus Jakarta Sans",
+    "monospace_font": "JetBrains Mono / Fira Code",
+    "font_imports": "@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap');",
+    "hierarchy": {
+      "h1_hero": "text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-none",
+      "h2_section": "text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight",
+      "h3_subsection": "text-xl sm:text-2xl font-semibold tracking-tight",
+      "h4_card_title": "text-lg sm:text-xl font-semibold",
+      "body_large": "text-base sm:text-lg leading-relaxed",
+      "body_regular": "text-sm sm:text-base leading-relaxed",
+      "caption": "text-xs sm:text-sm font-medium text-slate-400 tracking-wide uppercase"
+    },
+    "forbidden_fonts": ["Inter", "Roboto", "Open Sans", "Space Grotesk"]
+  },
+  "colors": {
+    "public_landing_theme": {
+      "mode": "Dark Premium with High Contrast Gold/Cyan Accents",
+      "background": "#0B0F17",
+      "surface_card": "#131B2A",
+      "surface_border": "rgba(255, 255, 255, 0.08)",
+      "primary_brand": "#3B82F6",
+      "accent_glow": "#60A5FA",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "text_muted": "#64748B",
+      "gold_premium_badge": "#F59E0B",
+      "emerald_active": "#10B981"
+    },
+    "admin_dashboard_theme": {
+      "mode": "SaaS Professional Slate / Dark Toggle",
+      "background_slate": "#0F172A",
+      "surface_slate": "#1E293B",
+      "surface_card_light": "#FFFFFF",
+      "background_light": "#F8FAFC",
+      "primary_blue": "#2563EB",
+      "status_active": "#10B981",
+      "status_unassigned": "#F59E0B",
+      "status_disabled": "#EF4444",
+      "status_pending": "#8B5CF6",
+      "border_subtle": "#E2E8F0"
+    },
+    "contrast_rules": "All text must meet minimum 4.5:1 contrast against surface. Explicit hover text colors required (e.g. hover:bg-blue-600 hover:text-white)."
+  },
+  "layout_and_spacing": {
+    "container_padding": "px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto",
+    "section_vertical_spacing": "py-16 sm:py-24 lg:py-32",
+    "bento_grid_marketing": "grid grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-6 sm:gap-8",
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6",
+    "mobile_constraints": "Images must not exceed max-h-[80vh] on mobile viewports."
+  },
+  "components_and_ui_patterns": {
+    "public_website": {
+      "navigation_header": "Fixed header with glassmorphism backdrop-blur-xl bg-slate-950/80 border-b border-slate-800/60 z-50. Must include Logo (Short Card / GlobalConnex), Links (Fitur, Cara Kerja, Gunakan Untuk, Garansi, Masuk Admin), CTA 'Aktifkan Kartu' + CS WhatsApp.",
+      "hero_section": "Hero text: 'Satu Kartu. Satu Tap. Semua Terhubung.' Subtitle: 'Solusi Kartu NFC + QR Code cerdas untuk meningkatkan Google Review, Medsos & Kontak Bisnis tanpa ganti kartu selamanya.' CTA buttons: 'Aktifkan Kartu' & 'Ajukan Koreksi Link'. Showcase 3D/realistic NFC Card mockups (Black & White variants).",
+      "benefits_grid": "6 Core Benefits Cards: NFC + QR Code, Tanpa Aplikasi Tambahan, Custom Logo Bisnis, Variat Black & White, Easy to Update Server-Side, Lifetime Garansi Link.",
+      "use_cases_section": "Platforms supported: Google Review, Instagram, TikTok, YouTube, Facebook, WhatsApp, Custom Link with interactive platform badges & preview mockups.",
+      "card_mockups_interactive": "Interactive Card Variant Selector (Hitam / Putih), 3D flip card effect showing Front (Logo + NFC chip indicator) and Back (QR Code + Public Short URL '/r/SC-0001').",
+      "how_it_works_steps": "4 Simple Steps: 1. Terima Kartu → 2. Tap NFC / Scan QR → 3. Aktivasi Link → 4. Langsung Terhubung.",
+      "activation_flow_form": "Multi-step mobile-first wizard: Step 1 Validation (Enter Kode Kartu e.g. SC-0001), Step 2 Destination Type (Google Review, Instagram, WhatsApp, Custom URL, etc.), Step 3 Business Details & URL input, Step 4 Optional Logo Upload, Step 5 Summary & Activation Confirmation.",
+      "link_correction_request": "Form page: Card Code, Business Name, Current Link, Requested New Link, Reason for Correction, Requester Name, WhatsApp Number, Email, Submit button with confirmation state.",
+      "footer": "GlobalConnex branding, Quick links, CS WhatsApp direct button, Copyright notice, Privacy policy & Terms."
+    },
+    "admin_dashboard": {
+      "sidebar_nav": "Left navigation sidebar (Dashboard Stats, Cards Management, Merchant Businesses, Link Corrections Queue, Audit Log / History, Settings).",
+      "stats_overview": "Key KPI widgets: Total Cards, Active Cards, Unassigned Cards, Disabled Cards, Total Merchants, Pending Corrections.",
+      "cards_table": "Data table with Search, Filter by Status (Active, Unassigned, Disabled), Sort, Pagination, Actions (Assign, Activate, Edit Link, View Detail Modal, Disable).",
+      "card_detail_modal": "Detail modal with high-res QR code generator/download button, public short link generator (/r/{code}), destination URL, current merchant info, change history timeline.",
+      "corrections_queue": "Queue cards/table with Approve / Reject actions, old link vs new link comparison, internal note input, instant update trigger.",
+      "settings_panel": "General settings, Default destination domains, System notifications, Admin credentials."
+    }
+  },
+  "motion_and_animations": {
+    "engine": "framer-motion + tailwind transition utilities",
+    "card_3d_hover": "perspective-1000 rotateY hover effects for physical card mockups",
+    "toast_notifications": "sonner library for instant feedback on activation, copy link, and status changes",
+    "reduced_motion": "Respect prefers-reduced-motion media query"
+  },
+  "image_urls": {
+    "black_nfc_card_mockup": "https://images.unsplash.com/photo-1628891439478-c613e85af7d6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwxfHxibGFjayUyMG5mYyUyMGNhcmQlMjBxciUyMGJ1c2luZXNzJTIwbG9nb3xlbnwwfHx8fDE3ODg2Njg2NzV8MA&ixlib=rb-4.1.0&q=85",
+    "white_nfc_card_mockup": "https://images.unsplash.com/photo-1600147131759-880e94a6185f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwyfHxibGFjayUyMG5mYyUyMGNhcmQlMjBxciUyMGJ1c2luZXNzJTIwbG9nb3xlbnwwfHx8fDE3ODg2Njg2NzV8MA&ixlib=rb-4.1.0&q=85",
+    "business_card_pair": "https://images.unsplash.com/photo-1588961577019-0f5e0e432253?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHw0fHxibGFjayUyMG5mYyUyMGNhcmQlMjBxciUyMGJ1c2luZXNzJTIwbG9nb3xlbnwwfHx8fDE3ODg2Njg2NzV8MA&ixlib=rb-4.1.0&q=85"
+  },
+  "testing_and_accessibility": {
+    "data_testid_rule": "ALL interactive components, buttons, inputs, links, badges, tabs, and modals MUST include explicit data-testid attributes (e.g. data-testid='hero-activate-button', data-testid='card-activation-code-input', data-testid='admin-sidebar-cards-link').",
+    "touch_targets": "Minimum 44x44px clickable/touchable area on all mobile elements."
+  },
+  "instructions_to_main_agent": {
+    "1_routing": "Implement client-side SPA routing or tabbed view supporting: Landing Page (/), Card Activation Wizard (/aktivasi), Link Correction Form (/koreksi), Public Short Link Redirection Preview (/r/:cardCode), and Admin Dashboard (/admin).",
+    "2_state_management": "Use LocalStorage or mock state store populated with realistic Indonesian business data (e.g. Warung Kopi Senja SC-0001 -> Google Maps, Klinik Sehat SC-0002 -> WhatsApp, Barber SC-0003 -> Instagram) to simulate real-time activation, redirection updates, and correction approvals.",
+    "3_mobile_first": "Prioritize seamless, high-touch mobile UX with smooth multi-step forms, copy-to-clipboard buttons, QR download, and instant Sonner toast feedback."
+  }
+}
