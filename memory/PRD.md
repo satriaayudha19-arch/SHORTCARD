@@ -37,12 +37,14 @@ kapan saja tanpa mengganti kartu/QR/NFC → fitur **Lifetime Garansi Link**. Tar
 
 ## API Endpoints
 - Auth: `POST /api/auth/login|logout|refresh`, `GET /api/auth/me`
-- Public: `GET /api/public/config`, `GET /api/public/cards/{code}`, `POST /api/public/cards/{code}/activate`,
+- Public: `GET /api/public/config`, `GET /api/public/cards/{code}` (status read-only),
   `POST /api/public/corrections`, `GET /api/public/cards/{code}/qr.png|qr.svg`
 - Redirect: `GET /api/r/{code}` → 302 ke destination / halaman error HTML informatif
-- Admin: `GET /api/admin/stats`, CRUD `/api/admin/cards` (+`/{code}`, `/disable`, `/enable`),
-  CRUD `/api/admin/businesses`, `GET/PATCH /api/admin/corrections(/{id})`,
+- Admin: `GET /api/admin/stats`, CRUD `/api/admin/cards` (+`/{code}`, **`POST /{code}/activate` (operator-only)**,
+  `/disable`, `/enable`), CRUD `/api/admin/businesses`, `GET/PATCH /api/admin/corrections(/{id})`,
   `GET /api/admin/history`, `GET/PATCH /api/admin/settings`
+- Catatan keamanan (7 Sep 2026): endpoint aktivasi publik DIHAPUS — aktivasi/konfigurasi kartu
+  hanya bisa dilakukan admin/operator terautentikasi (anti-hijack kartu inventaris fisik).
 
 ## Routes
 - Public: `/` landing, `/activate` (alias `/aktivasi`), `/correction` (alias `/koreksi`),
@@ -60,8 +62,24 @@ kapan saja tanpa mengganti kartu/QR/NFC → fitur **Lifetime Garansi Link**. Tar
   ubah tujuan, assign bisnis, disable/enable, QR download), bisnis CRUD, koreksi (review/approve/reject +
   catatan internal), riwayat audit global, pengaturan CS WhatsApp
 - Seed: admin dari env, demo data (SC-0001..SC-0006, 2 bisnis, 1 koreksi PENDING)
-- 9 integration tests (`/app/backend/tests/test_core.py`) — semua lulus, termasuk concurrency 10 request
+- 11 integration tests (`/app/backend/tests/test_core.py`) — semua lulus, termasuk concurrency 10 request,
+  anti-hijack (aktivasi anonim → 401/404, kartu ACTIVE → 409)
 - Validasi URL per destination type + blokir scheme berbahaya; HTTPS only
+
+## Update 7 Sep 2026 — Model Bisnis Kartu Fisik (QR pre-printed + NFC NTAG213 blank)
+- **Aktivasi menjadi operator-only**: halaman `/activate` diproteksi auth (redirect ke `/admin/login`,
+  kembali ke `/activate` setelah login). Endpoint pindah ke `POST /api/admin/cards/{code}/activate`
+  (JWT wajib); endpoint publik lama dihapus (404).
+- **Layar hasil aktivasi operator**: Kode Kartu, Bisnis, Jenis Tujuan, URL Tujuan Saat Ini,
+  URL Short Card Permanen, status "QR sudah tercetak pada kartu", status "NFC siap diprogram",
+  tombol prominen **Salin URL NFC** + panel NFC NTAG213 dengan instruksi penulisan via aplikasi
+  NFC writer Android + test tap. Tidak ada pembuatan QR baru di flow aktivasi — generator QR
+  (`/api/public/cards/{code}/qr.png|svg`) tetap tersedia untuk verifikasi/admin (pratinjau kecil opsional
+  di layar sukses, download di halaman detail kartu admin).
+- **QR/NFC permanen**: keduanya selalu berisi `{PUBLIC_BASE_URL}/r/{code}`; destination berubah →
+  kartu fisik, QR, dan URL NFC tidak berubah (Lifetime Garansi Link). CardDetailPage admin diperbarui
+  dengan instruksi NTAG213.
+- Frontend dev server direstart setelah edit (bundle lama tersaji saat hot-reload parsial).
 
 ## Environment Variables (backend/.env)
 - `MONGO_URL`, `DB_NAME` (pre-existing), `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`,

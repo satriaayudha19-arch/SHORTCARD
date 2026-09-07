@@ -65,6 +65,34 @@ def test_card_not_found():
     assert res.status_code == 404 and "Kartu Tidak Ditemukan" in res.text
 
 
+def test_activation_requires_admin():
+    """Aktivasi adalah operasi khusus admin/operator — anonim harus ditolak."""
+    payload = {
+        "destination_type": "CUSTOM",
+        "destination_url": "https://example.com",
+        "business": {"name": "Hijack Attempt"},
+    }
+    res = requests.post(f"{BASE}/admin/cards/SC-0005/activate", json=payload)
+    assert res.status_code in (401, 403)
+    # Endpoint publik lama sudah tidak tersedia
+    res = requests.post(f"{BASE}/public/cards/SC-0005/activate", json=payload)
+    assert res.status_code in (404, 405)
+
+
+def test_active_card_cannot_be_reactivated(auth):
+    """Kartu ACTIVE tidak bisa diaktivasi ulang / di-hijack."""
+    res = requests.post(f"{BASE}/admin/cards/SC-0001/activate", json={
+        "destination_type": "GOOGLE_REVIEW",
+        "destination_url": "https://search.google.com/local/writereview?placeid=ChIJHijack",
+        "business": {"name": "Hijack Attempt"},
+    }, headers=auth)
+    assert res.status_code == 409
+    # Tujuan kartu tidak berubah
+    res = requests.get(f"{BASE}/r/SC-0001", allow_redirects=False)
+    assert res.status_code == 302
+    assert "ChIJHijack" not in res.headers["location"]
+
+
 def test_full_card_lifecycle(auth):
     """Create → activate → redirect → update link → redirect baru → disable."""
     res = requests.post(f"{BASE}/admin/cards", json={"count": 1}, headers=auth)
@@ -74,12 +102,12 @@ def test_full_card_lifecycle(auth):
     res = requests.get(f"{BASE}/r/{code}", allow_redirects=False)
     assert res.status_code == 200 and "Link Belum Dikonfigurasi" in res.text
 
-    # Aktivasi publik
-    res = requests.post(f"{BASE}/public/cards/{code}/activate", json={
+    # Aktivasi oleh admin/operator
+    res = requests.post(f"{BASE}/admin/cards/{code}/activate", json={
         "destination_type": "INSTAGRAM",
         "destination_url": "https://instagram.com/testlifecycle",
         "business": {"name": "Test Lifecycle Biz"},
-    })
+    }, headers=auth)
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["status"] == "ACTIVE"
@@ -122,18 +150,18 @@ def test_activation_validates_url(auth):
     res = requests.post(f"{BASE}/admin/cards", json={"count": 1}, headers=auth)
     code = res.json()["codes"][0]
     # javascript: scheme harus ditolak
-    res = requests.post(f"{BASE}/public/cards/{code}/activate", json={
+    res = requests.post(f"{BASE}/admin/cards/{code}/activate", json={
         "destination_type": "CUSTOM",
         "destination_url": "javascript:alert(1)",
         "business": {"name": "Test Sec"},
-    })
+    }, headers=auth)
     assert res.status_code == 400
     # URL non-Instagram untuk tipe INSTAGRAM harus ditolak
-    res = requests.post(f"{BASE}/public/cards/{code}/activate", json={
+    res = requests.post(f"{BASE}/admin/cards/{code}/activate", json={
         "destination_type": "INSTAGRAM",
         "destination_url": "https://example.com/page",
         "business": {"name": "Test Sec"},
-    })
+    }, headers=auth)
     assert res.status_code == 400
 
 
@@ -141,11 +169,11 @@ def test_correction_flow(auth):
     """Submit koreksi → admin approve → destination berubah → history tercatat."""
     res = requests.post(f"{BASE}/admin/cards", json={"count": 1}, headers=auth)
     code = res.json()["codes"][0]
-    requests.post(f"{BASE}/public/cards/{code}/activate", json={
+    requests.post(f"{BASE}/admin/cards/{code}/activate", json={
         "destination_type": "WHATSAPP",
         "destination_url": "https://wa.me/6281111111111",
         "business": {"name": "Test Correction Biz"},
-    })
+    }, headers=auth)
 
     marker = uuid.uuid4().hex[:8]
     res = requests.post(f"{BASE}/public/corrections", json={

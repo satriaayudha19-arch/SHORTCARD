@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Nfc, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
@@ -11,14 +11,16 @@ import { Label } from "@/components/ui/label";
 export default function AdminLogin() {
     const { user, login } = useAuth();
     const navigate = useNavigate();
+    const location = useLocation();
+    const from = location.state?.from || "/admin";
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
     useEffect(() => {
-        if (user) navigate("/admin", { replace: true });
-    }, [user, navigate]);
+        if (user) navigate(from, { replace: true });
+    }, [user, navigate, from]);
 
     if (user) return null;
 
@@ -29,7 +31,7 @@ export default function AdminLogin() {
         try {
             await login(email, password);
             toast.success("Selamat datang kembali!");
-            navigate("/admin", { replace: true });
+            navigate(from, { replace: true });
         } catch (err) {
             setError(formatApiError(err));
         } finally {

@@ -388,18 +388,11 @@ async def public_card_status(code: str):
     return result
 
 
-@api_router.post("/public/cards/{code}/activate")
-async def activate_card(code: str, body: ActivationInput, request: Request):
-    rate_limit(f"act:{request.client.host if request.client else 'unknown'}", 10, 60)
-    code = normalize_code(code)
-    destination_url = validate_destination_url(body.destination_type, body.destination_url)
-    card = await db.cards.find_one({"code": code})
-    if not card:
-        raise HTTPException(status_code=404, detail="Kartu tidak ditemukan. Periksa kembali kode kartu Anda.")
+async def perform_activation(card: dict, code: str, body: ActivationInput, destination_url: str, changed_by: str) -> dict:
     if card["status"] == "DISABLED":
         raise HTTPException(status_code=403, detail="Kartu ini dinonaktifkan. Hubungi Customer Service.")
     if card["status"] == "ACTIVE":
-        raise HTTPException(status_code=409, detail="Kartu sudah aktif. Gunakan Ajukan Koreksi Link untuk mengubah tujuan.")
+        raise HTTPException(status_code=409, detail="Kartu sudah aktif. Gunakan Ubah Tujuan atau alur Koreksi Link untuk mengubah tujuan.")
     if body.business.logo_data and len(body.business.logo_data) > 500_000:
         raise HTTPException(status_code=400, detail="Ukuran logo terlalu besar (maks 350KB).")
 
@@ -430,8 +423,8 @@ async def activate_card(code: str, body: ActivationInput, request: Request):
         "card_code": code,
         "old_url": old_url,
         "new_url": destination_url,
-        "changed_by": "customer_activation",
-        "reason": "Aktivasi kartu oleh pelanggan",
+        "changed_by": changed_by,
+        "reason": "Aktivasi kartu oleh operator",
         "request_id": None,
         "created_at": now,
     })
@@ -439,6 +432,7 @@ async def activate_card(code: str, body: ActivationInput, request: Request):
         "message": "Kartu berhasil diaktifkan.",
         "code": code,
         "status": "ACTIVE",
+        "business_name": body.business.name,
         "destination_type": body.destination_type,
         "destination_url": destination_url,
         "public_url": public_card_url(code),
@@ -606,6 +600,14 @@ async def create_cards(body: CardCreateInput, admin: dict = Depends(get_current_
         await db.cards.insert_one(doc)
         created.append(code)
     return {"message": f"{len(created)} kartu berhasil dibuat.", "codes": created}
+
+
+@api_router.post("/admin/cards/{code}/activate")
+async def admin_activate_card(code: str, body: ActivationInput, admin: dict = Depends(get_current_admin)):
+    code = normalize_code(code)
+    destination_url = validate_destination_url(body.destination_type, body.destination_url)
+    card = await get_card_or_404(code)
+    return await perform_activation(card, code, body, destination_url, admin["email"])
 
 
 async def get_card_or_404(code: str) -> dict:

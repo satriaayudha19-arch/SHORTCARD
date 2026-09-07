@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { Navigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
     Nfc, Star, Instagram, Music2, Youtube, Facebook, MessageCircle, Link2,
-    ArrowRight, ArrowLeft, CheckCircle2, Copy, Download, Loader2, Upload,
+    ArrowRight, ArrowLeft, CheckCircle2, Copy, Loader2, Upload,
 } from "lucide-react";
 import PublicNav from "@/components/public/PublicNav";
 import PublicFooter from "@/components/public/PublicFooter";
@@ -11,6 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/context/AuthContext";
 import api, { API_BASE, formatApiError } from "@/lib/api";
 
 const DEST_TYPES = [
@@ -26,6 +29,7 @@ const DEST_TYPES = [
 const STEP_LABELS = ["Kode Kartu", "Jenis Tujuan", "Link & Bisnis", "Konfirmasi"];
 
 export default function ActivatePage() {
+    const { user } = useAuth();
     const [step, setStep] = useState(0);
     const [loading, setLoading] = useState(false);
     const [code, setCode] = useState("");
@@ -35,6 +39,20 @@ export default function ActivatePage() {
     const [biz, setBiz] = useState({ name: "", owner_name: "", whatsapp: "", email: "", address: "" });
     const [logo, setLogo] = useState(null);
     const [result, setResult] = useState(null);
+
+    if (user === null) {
+        return (
+            <div className="min-h-screen bg-[#0B0F17] pt-32 px-6" data-testid="activate-auth-loading">
+                <div className="max-w-xl mx-auto space-y-4">
+                    <Skeleton className="h-10 w-48" />
+                    <Skeleton className="h-64 w-full" />
+                </div>
+            </div>
+        );
+    }
+    if (user === false) {
+        return <Navigate to="/admin/login" state={{ from: "/activate" }} replace />;
+    }
 
     const validateCard = async () => {
         if (!code.trim()) return;
@@ -85,7 +103,7 @@ export default function ActivatePage() {
                     logo_data: logo || undefined,
                 },
             };
-            const res = await api.post(`/public/cards/${encodeURIComponent(cardInfo.code)}/activate`, payload);
+            const res = await api.post(`/admin/cards/${encodeURIComponent(cardInfo.code)}/activate`, payload);
             setResult(res.data);
             setStep(4);
             toast.success("Kartu berhasil diaktifkan!");
@@ -98,7 +116,18 @@ export default function ActivatePage() {
 
     const copyUrl = () => {
         navigator.clipboard.writeText(result.public_url);
-        toast.success("URL Short Card disalin!");
+        toast.success("URL permanen disalin! Tulis URL ini ke NFC NTAG213.");
+    };
+
+    const resetFlow = () => {
+        setStep(0);
+        setCode("");
+        setCardInfo(null);
+        setDestType("");
+        setDestUrl("");
+        setBiz({ name: "", owner_name: "", whatsapp: "", email: "", address: "" });
+        setLogo(null);
+        setResult(null);
     };
 
     const canNextStep2 = destType !== "";
@@ -114,7 +143,7 @@ export default function ActivatePage() {
                             <Nfc className="w-7 h-7 text-white" />
                         </span>
                         <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">Aktivasi Kartu</h1>
-                        <p className="text-slate-400 mt-3 text-sm sm:text-base">Aktifkan Short Card Anda dalam beberapa langkah mudah.</p>
+                        <p className="text-slate-400 mt-3 text-sm sm:text-base">Alat operator Short Card: konfigurasikan link tujuan kartu, lalu tulis URL permanen ke NFC NTAG213.</p>
                     </div>
 
                     {step < 4 && (
@@ -268,7 +297,7 @@ export default function ActivatePage() {
                                     <div className="flex justify-between gap-4"><dt className="text-slate-500">Bisnis</dt><dd className="font-semibold text-right">{biz.name}</dd></div>
                                 </dl>
                                 <p className="text-xs text-slate-500 mt-5 leading-relaxed">
-                                    Setelah aktif, QR Code &amp; NFC kartu akan mengarah ke URL Short Card Anda. Link tujuan dapat diubah kapan saja melalui Ajukan Koreksi Link.
+                                    Setelah aktif, QR Code (sudah tercetak) &amp; NFC kartu akan mengarah ke URL Short Card permanen. Link tujuan dapat diubah kapan saja tanpa mengganti kartu.
                                 </p>
                                 <div className="flex gap-3 mt-6">
                                     <Button variant="outline" onClick={() => setStep(2)} className="rounded-full border-slate-700 text-slate-300">
@@ -287,39 +316,53 @@ export default function ActivatePage() {
                         )}
 
                         {step === 4 && result && (
-                            <motion.div key="s4" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="rounded-2xl border border-emerald-500/40 bg-[#131B2A] p-6 sm:p-8 text-center" data-testid="activation-success">
-                                <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto mb-4" />
-                                <h2 className="text-2xl font-bold mb-2">Kartu Berhasil Diaktifkan!</h2>
-                                <p className="text-slate-400 text-sm mb-6">Simpan URL dan QR Code di bawah ini.</p>
-                                <div className="bg-white rounded-2xl p-5 inline-block mb-5">
-                                    <img
-                                        src={`${API_BASE}/public/cards/${result.code}/qr.png`}
-                                        alt={`QR Code ${result.code}`}
-                                        className="w-44 h-44"
-                                        data-testid="activation-qr-image"
-                                    />
+                            <motion.div key="s4" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4" data-testid="activation-success">
+                                <div className="rounded-2xl border border-emerald-500/40 bg-[#131B2A] p-6 sm:p-8">
+                                    <div className="text-center mb-6">
+                                        <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto mb-3" />
+                                        <h2 className="text-2xl font-bold">Kartu Berhasil Diaktifkan!</h2>
+                                    </div>
+                                    <dl className="space-y-3 text-sm">
+                                        <div className="flex justify-between gap-4"><dt className="text-slate-500">Kode Kartu</dt><dd className="font-mono-code font-bold" data-testid="result-card-code">{result.code}</dd></div>
+                                        <div className="flex justify-between gap-4"><dt className="text-slate-500">Bisnis</dt><dd className="font-semibold text-right" data-testid="result-business-name">{result.business_name}</dd></div>
+                                        <div className="flex justify-between gap-4"><dt className="text-slate-500">Jenis Tujuan</dt><dd className="font-semibold" data-testid="result-dest-type">{DEST_TYPES.find((d) => d.value === result.destination_type)?.label}</dd></div>
+                                        <div>
+                                            <dt className="text-slate-500 mb-1">URL Tujuan Saat Ini</dt>
+                                            <dd className="font-mono-code text-xs break-all text-blue-300 bg-[#0B0F17] rounded-lg p-3 border border-slate-800" data-testid="result-dest-url">{result.destination_url}</dd>
+                                        </div>
+                                        <div>
+                                            <dt className="text-slate-500 mb-1">URL Short Card Permanen</dt>
+                                            <dd className="font-mono-code text-xs break-all text-emerald-300 bg-[#0B0F17] rounded-lg p-3 border border-emerald-500/30" data-testid="result-public-url">{result.public_url}</dd>
+                                        </div>
+                                        <div className="flex justify-between gap-4"><dt className="text-slate-500">QR Code</dt><dd className="text-emerald-400 font-semibold text-right" data-testid="result-qr-status">QR sudah tercetak pada kartu</dd></div>
+                                        <div className="flex justify-between gap-4"><dt className="text-slate-500">NFC</dt><dd className="text-amber-400 font-semibold text-right" data-testid="result-nfc-status">NFC siap diprogram</dd></div>
+                                    </dl>
                                 </div>
-                                <div className="flex items-center gap-2 bg-[#0B0F17] border border-slate-800 rounded-full pl-5 pr-2 py-2 mb-5">
-                                    <span className="font-mono-code text-xs sm:text-sm text-blue-300 truncate flex-1 text-left" data-testid="activation-public-url">{result.public_url}</span>
-                                    <Button size="sm" data-testid="activation-copy-url-button" onClick={copyUrl} className="rounded-full bg-blue-600 hover:bg-blue-500">
-                                        <Copy className="w-4 h-4" />
+
+                                <div className="rounded-2xl border border-blue-500/40 bg-blue-600/10 p-6 sm:p-8" data-testid="nfc-programming-section">
+                                    <h3 className="font-bold text-lg flex items-center gap-2 mb-1"><Nfc className="w-5 h-5 text-blue-400" /> NFC NTAG213</h3>
+                                    <p className="text-xs text-slate-400 mb-4">Status: <span className="text-amber-400 font-semibold">Siap diprogram</span></p>
+                                    <div className="bg-[#0B0F17] border border-slate-700 rounded-xl px-4 py-3 mb-4">
+                                        <span className="font-mono-code text-xs sm:text-sm text-blue-300 break-all" data-testid="nfc-url-text">{result.public_url}</span>
+                                    </div>
+                                    <Button data-testid="copy-nfc-url-button" onClick={copyUrl} className="w-full h-12 rounded-full bg-blue-600 hover:bg-blue-500 font-bold text-base">
+                                        <Copy className="w-4 h-4 mr-2" /> Salin URL NFC
+                                    </Button>
+                                    <p className="text-sm text-slate-300 mt-4 leading-relaxed">
+                                        Gunakan URL ini untuk ditulis ke NFC NTAG213 melalui aplikasi NFC writer di Android. Setelah selesai, lakukan test tap menggunakan smartphone.
+                                    </p>
+                                    <p className="text-xs text-slate-500 mt-2 leading-relaxed">
+                                        QR Code pada kartu tidak perlu dicetak ulang — QR &amp; NFC mengarah ke URL permanen yang sama.
+                                    </p>
+                                </div>
+
+                                <div className="rounded-2xl border border-slate-800 bg-[#131B2A] p-5 text-center">
+                                    <p className="text-xs text-slate-500 mb-3">Verifikasi QR (opsional) — QR fisik sudah tercetak pada kartu</p>
+                                    <img src={`${API_BASE}/public/cards/${result.code}/qr.png`} alt={`QR verifikasi ${result.code}`} className="w-24 h-24 mx-auto rounded-lg bg-white p-1" data-testid="activation-qr-preview" />
+                                    <Button variant="outline" data-testid="activation-new-card-button" onClick={resetFlow} className="w-full mt-5 rounded-full border-slate-700 text-slate-200">
+                                        Aktivasi Kartu Lain
                                     </Button>
                                 </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <a href={`${API_BASE}/public/cards/${result.code}/qr.png?download=true`} data-testid="activation-download-png">
-                                        <Button variant="outline" className="w-full rounded-full border-slate-700 text-slate-200">
-                                            <Download className="w-4 h-4 mr-2" /> PNG
-                                        </Button>
-                                    </a>
-                                    <a href={`${API_BASE}/public/cards/${result.code}/qr.svg?download=true`} data-testid="activation-download-svg">
-                                        <Button variant="outline" className="w-full rounded-full border-slate-700 text-slate-200">
-                                            <Download className="w-4 h-4 mr-2" /> SVG
-                                        </Button>
-                                    </a>
-                                </div>
-                                <p className="text-xs text-slate-500 mt-6 leading-relaxed">
-                                    QR Code ini berisi URL Short Card Anda — bukan link tujuan langsung. Jika link berubah, QR tetap berlaku (Lifetime Garansi Link).
-                                </p>
                             </motion.div>
                         )}
                     </AnimatePresence>
