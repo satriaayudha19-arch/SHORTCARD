@@ -8,10 +8,18 @@ import uuid
 
 import pytest
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 BASE = os.environ.get("SHORTCARD_API", "http://localhost:8001/api")
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "satriaayudha19@gmail.com")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "SCg#2026!xQ7mP4wZk")
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+
+pytestmark = pytest.mark.skipif(
+    not (ADMIN_EMAIL and ADMIN_PASSWORD),
+    reason="ADMIN_EMAIL/ADMIN_PASSWORD tidak diatur (dibaca dari backend/.env atau environment)",
+)
 
 
 @pytest.fixture(scope="session")
