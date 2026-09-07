@@ -26,3 +26,4 @@ Thumbs.db
 # Emergent
 .emergent/
 frontend/node_modules/.cache/default-development/0.pack
+memory/test_credentials.md
