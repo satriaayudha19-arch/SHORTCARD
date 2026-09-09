@@ -94,6 +94,26 @@ kapan saja tanpa mengganti kartu/QR/NFC → fitur **Lifetime Garansi Link**. Tar
   503 yang jelas — fitur lain tidak terpengaruh.
 - Tests: 22/22 lulus (termasuk validator per platform, redirect per destination type, propagasi
   Business→Card, penolakan fake Place ID, Google 503 tanpa key).
+
+## Update 9 Sep 2026 — Production Readiness Audit (commit 3bbbeb0 → hardening)
+- **Fix host validation Google**: regex regional lama menerima `google.evil.com`/`google.football`/
+  `google.xyz`. Diganti `GOOGLE_REGIONAL_RE` — hanya `google.<ccTLD 2 huruf>` (google.de, google.io,
+  google.co.id) atau `google.(com|co|net|org|ac|go|ne|or).<ccTLD>` (google.com.au). gTLD >2 huruf ditolak.
+- **Fix SSRF short-URL resolution**: `follow_redirects=True` diganti follow manual per-hop
+  (maks 5 hop); setiap hop divalidasi wajib HTTPS + host Google; chain panjang/non-Google ditolak 400.
+- **Fix Text Search ambiguity**: hasil >1 → **409 gagal-aman** dengan daftar kandidat (nama — alamat),
+  tidak lagi memilih hasil pertama secara diam-diam. Case: 1 hasil → lanjut; 0 → 404; quota → 429;
+  auth → 502.
+- **Fix konsistensi snapshot**: `perform_activation` kini menulis destination ke field Business yang
+  sesuai (`DEST_TO_BIZ_FIELD`) sejak aktivasi → Business (source of truth) dan card.destination_url
+  (runtime snapshot) konsisten.
+- Audit lulus tanpa perubahan: extraction Place ID (hex CID & token short URL ditolak, selalu
+  diverifikasi Places API), review URL hanya dari Place ID terverifikasi, redirect publik tanpa API call
+  per scan, social validator murni lokal, propagasi hanya kartu ACTIVE dengan tipe cocok (DISABLED/
+  ASSIGNED/UNASSIGNED tidak tersentuh), state `google_verified` direset saat Maps URL berubah.
+- Tests: **27/27 lulus** (tambah: unit host validation, unit Place ID extraction, malicious domain API,
+  propagation matrix 5 tipe + kartu DISABLED, konsistensi snapshot aktivasi).
+- Real Google API test: NOT EXECUTED — `GOOGLE_MAPS_API_KEY` belum dikonfigurasi.
 - **Aktivasi menjadi operator-only**: halaman `/activate` diproteksi auth (redirect ke `/admin/login`,
   kembali ke `/activate` setelah login). Endpoint pindah ke `POST /api/admin/cards/{code}/activate`
   (JWT wajib); endpoint publik lama dihapus (404).

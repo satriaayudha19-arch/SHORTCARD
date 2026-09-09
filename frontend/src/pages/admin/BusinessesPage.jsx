@@ -136,8 +136,9 @@ export default function BusinessesPage() {
                             <Plus className="w-4 h-4 mr-2" /> Tambah Bisnis
                         </Button>
                     </DialogTrigger>
-                    <DialogContent className="bg-white max-h-[90vh] overflow-y-auto">
+                    <DialogContent className="bg-white max-h-[90vh] overflow-y-auto" aria-describedby="business-form-desc">
                         <DialogHeader><DialogTitle>{editing ? "Ubah Bisnis" : "Tambah Bisnis"}</DialogTitle></DialogHeader>
+                        <p id="business-form-desc" className="text-xs text-slate-500">Kelola data bisnis, verifikasi Google Business, dan URL social media. URL tervalidasi otomatis tersimpan ke bisnis dan terpropagasi ke kartu aktif terkait.</p>
                         <div className="space-y-4 pt-2">
                             <div><Label>Nama Bisnis *</Label><Input data-testid="business-form-name" value={form.name} onChange={set("name")} className="mt-2" /></div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

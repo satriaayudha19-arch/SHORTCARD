@@ -348,3 +348,128 @@ def test_business_rejects_foreign_social_domain(auth):
 def test_business_rejects_non_google_maps_url(auth):
     res = requests.post(f"{BASE}/admin/businesses", json={"name": "Biz Maps Palsu", "google_maps_url": "https://example.com/maps"}, headers=auth)
     assert res.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — host validation & Place ID extraction (pure functions)
+# ---------------------------------------------------------------------------
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from server import _extract_place_id, _is_google_maps_host  # noqa: E402
+
+
+def test_google_host_validation_unit():
+    # Domain regional Google: google.<ccTLD 2 huruf> diterima (google.de, google.io, google.co.id, dst).
+    # Gerbang akhir tetap Places API — Place ID palsu/tidak ada akan ditolak Google.
+    for good in ["maps.app.goo.gl", "www.google.com", "google.com", "maps.google.com",
+                 "www.google.co.id", "google.de", "google.com.au", "search.google.com", "goo.gl", "g.page", "google.io"]:
+        assert _is_google_maps_host(good), f"seharusnya diterima: {good}"
+    # gTLD >2 huruf & domain tiruan harus DITOLAK
+    for bad in ["google.evil.com", "google.football", "google.xyz", "www.google.com.evil.com",
+                "maps.app.goo.gl.evil.com", "evilgoogle.com", "notgoogle.com", "google.io.evil.com"]:
+        assert not _is_google_maps_host(bad), f"seharusnya DITOLAK: {bad}"
+
+
+def test_place_id_extraction_unit():
+    pid = "ChIJN1t_tDeuEmsRUsoyG83frY4"
+    assert _extract_place_id(f"https://www.google.com/maps/place/X/data=!3m1!4b1!4m5!3m4!1s{pid}!8m2!3d1!4d1") == pid
+    assert _extract_place_id(f"https://www.google.com/maps?place_id={pid}") == pid
+    # hex CID (0x...) BUKAN Place ID → jangan diekstrak
+    assert _extract_place_id("https://www.google.com/maps/data=!1s0x89c259a9b3117469:0x87fb9f6f68f9f01b") is None
+    # token short URL BUKAN Place ID
+    assert _extract_place_id("https://maps.app.goo.gl/HzeHM1gp3wFzWvWJ8") is None
+    # /place/<nama> tanpa data blob → tidak ada Place ID
+    assert _extract_place_id("https://www.google.com/maps/place/Kopi+ABC") is None
+
+
+def test_google_like_malicious_domains_rejected_api(auth):
+    for bad in [
+        "https://google.evil.com/maps/place/x",
+        "https://google.football/maps/place/x",
+        "https://www.google.com.evil.com/maps",
+        "https://maps.app.goo.gl.evil.com/abc",
+        "https://notgoogle.com/maps",
+    ]:
+        res = requests.post(f"{BASE}/admin/businesses/verify-google", json={"google_maps_url": bad}, headers=auth)
+        assert res.status_code == 400, f"domain jahat harus 400: {bad}"
+    # Domain regional Google legitimate tetap lolos host-check (tanpa API key → 503, bukan 400)
+    res = requests.post(f"{BASE}/admin/businesses/verify-google",
+                        json={"google_maps_url": "https://www.google.co.id/maps/place/Kopi+ABC"}, headers=auth)
+    assert res.status_code != 400
+
+
+# ---------------------------------------------------------------------------
+# Propagation matrix — satu Business, banyak Card tipe berbeda
+# ---------------------------------------------------------------------------
+def test_propagation_matrix_only_matching_cards_change(auth):
+    res = requests.post(f"{BASE}/admin/businesses", json={
+        "name": "Biz Matrix",
+        "instagram_url": "https://instagram.com/matrix.ig",
+        "tiktok_url": "https://tiktok.com/@matrix.tt",
+        "facebook_url": "https://facebook.com/matrixfb",
+        "youtube_url": "https://youtube.com/@matrixyt",
+        "whatsapp_url": "https://wa.me/6281111111111",
+        "google_review_url": "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+    }, headers=auth)
+    assert res.status_code == 200, res.text
+    biz_id = res.json()["id"]
+
+    dest = {
+        "GOOGLE_REVIEW": "https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+        "INSTAGRAM": "https://instagram.com/matrix.ig",
+        "TIKTOK": "https://tiktok.com/@matrix.tt",
+        "FACEBOOK": "https://facebook.com/matrixfb",
+        "YOUTUBE": "https://youtube.com/@matrixyt",
+    }
+    norm_awal = {
+        "GOOGLE_REVIEW": dest["GOOGLE_REVIEW"],
+        "INSTAGRAM": "https://www.instagram.com/matrix.ig/",
+        "TIKTOK": "https://www.tiktok.com/@matrix.tt",
+        "FACEBOOK": "https://www.facebook.com/matrixfb",
+        "YOUTUBE": "https://www.youtube.com/@matrixyt",
+    }
+    cards = {}
+    for dtype, url in dest.items():
+        code = requests.post(f"{BASE}/admin/cards", json={"count": 1}, headers=auth).json()["codes"][0]
+        res = requests.patch(f"{BASE}/admin/cards/{code}", json={"business_id": biz_id}, headers=auth)
+        assert res.status_code == 200, res.text
+        res = requests.patch(f"{BASE}/admin/cards/{code}",
+                             json={"destination_type": dtype, "destination_url": url, "status": "ACTIVE", "reason": "setup matrix"},
+                             headers=auth)
+        assert res.status_code == 200, res.text
+        cards[dtype] = code
+
+    # Kartu DISABLED bertipe INSTAGRAM TIDAK boleh ikut berubah
+    disabled_code = requests.post(f"{BASE}/admin/cards", json={"count": 1}, headers=auth).json()["codes"][0]
+    requests.patch(f"{BASE}/admin/cards/{disabled_code}", json={"business_id": biz_id}, headers=auth)
+    requests.patch(f"{BASE}/admin/cards/{disabled_code}",
+                   json={"destination_type": "INSTAGRAM", "destination_url": "https://instagram.com/matrix.ig", "status": "ACTIVE"},
+                   headers=auth)
+    requests.post(f"{BASE}/admin/cards/{disabled_code}/disable", headers=auth)
+
+    # Ubah HANYA instagram_url pada Business
+    res = requests.patch(f"{BASE}/admin/businesses/{biz_id}", json={"instagram_url": "https://instagram.com/matrix.baru"}, headers=auth)
+    assert res.status_code == 200, res.text
+
+    for dtype in dest:
+        detail = requests.get(f"{BASE}/admin/cards/{cards[dtype]}", headers=auth).json()
+        want = "https://www.instagram.com/matrix.baru/" if dtype == "INSTAGRAM" else norm_awal[dtype]
+        assert detail["destination_url"] == want, f"{dtype}: {detail['destination_url']} != {want}"
+
+    # Kartu DISABLED tetap URL lama
+    detail = requests.get(f"{BASE}/admin/cards/{disabled_code}", headers=auth).json()
+    assert detail["destination_url"] == "https://www.instagram.com/matrix.ig/"
+
+    # Redirect kartu INSTAGRAM → URL baru; kartu lain → URL lama
+    res = requests.get(f"{BASE}/r/{cards['INSTAGRAM']}", allow_redirects=False)
+    assert res.headers["location"] == "https://www.instagram.com/matrix.baru/"
+    res = requests.get(f"{BASE}/r/{cards['TIKTOK']}", allow_redirects=False)
+    assert res.headers["location"] == "https://www.tiktok.com/@matrix.tt"
+
+
+def test_activation_writes_business_destination_field(auth):
+    """Snapshot konsisten: aktivasi menulis destination ke field Business yang sesuai."""
+    code = _create_active_card(auth, "TIKTOK", "https://tiktok.com/@snap.test", "Biz Snapshot")
+    detail = requests.get(f"{BASE}/admin/cards/{code}", headers=auth).json()
+    assert detail["business"]["tiktok_url"] == "https://www.tiktok.com/@snap.test"
+    assert detail["destination_url"] == "https://www.tiktok.com/@snap.test"

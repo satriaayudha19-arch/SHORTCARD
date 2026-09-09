@@ -8,7 +8,7 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Annotated
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, urljoin
 
 import bcrypt
 import httpx
@@ -125,13 +125,19 @@ def _host_of(url: str) -> str:
     return urlparse(url).netloc.lower().split(":")[0]
 
 
+GOOGLE_REGIONAL_RE = re.compile(r"^(www\.)?google\.([a-z]{2}|(com|co|net|org|ac|go|ne|or)\.[a-z]{2})$")
+
+
 def _is_google_maps_host(host: str) -> bool:
+    # Hanya exact host / subdomain resmi Google. Substring check dilarang:
+    # google.evil.com, google.football, google.xyz, google.com.evil.com harus DITOLAK.
+    # Domain regional legitimate: google.co.id, google.de, google.com.au, dll.
     return (
         host in GOOGLE_SHORT_HOSTS
         or host == "maps.google.com"
         or host == "google.com"
         or host.endswith(".google.com")
-        or re.match(r"^(www\.)?google\.[a-z]{2,}(\.[a-z]{2,})?$", host) is not None
+        or GOOGLE_REGIONAL_RE.match(host) is not None
         or host.endswith(".g.co")
     )
 
@@ -315,16 +321,30 @@ async def verify_google_business(google_maps_url: str) -> dict:
         raise HTTPException(status_code=503, detail="Verifikasi Google belum dapat dilakukan: GOOGLE_MAPS_API_KEY belum dikonfigurasi di server.")
 
     # Resolve short URL (maps.app.goo.gl) → URL Google Maps penuh. Tanpa HTML scraping.
+    # SSRF-safe: redirect diikuti manual per-hop (maks 5 hop), setiap hop WAJIB host Google + HTTPS.
     resolved = url
     if host in GOOGLE_SHORT_HOSTS:
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as http:
-                resp = await http.get(url, headers={"User-Agent": "ShortCard-Verification/1.0"})
-                resolved = str(resp.url)
+            async with httpx.AsyncClient(follow_redirects=False, timeout=10.0) as http:
+                for _ in range(5):
+                    resp = await http.get(resolved, headers={"User-Agent": "ShortCard-Verification/1.0"})
+                    location = resp.headers.get("location")
+                    if resp.status_code in (301, 302, 303, 307, 308) and location:
+                        nxt = urljoin(resolved, location)
+                        nxt_parsed = urlparse(nxt)
+                        if nxt_parsed.scheme != "https":
+                            raise HTTPException(status_code=400, detail="Redirect short URL tidak aman (non-HTTPS).")
+                        if not _is_google_maps_host(nxt_parsed.netloc.lower().split(":")[0]):
+                            raise HTTPException(status_code=400, detail="Short URL mengarah ke domain di luar Google — ditolak.")
+                        resolved = nxt
+                        continue
+                    if 200 <= resp.status_code < 300:
+                        break
+                    raise HTTPException(status_code=502, detail="Google Maps short URL tidak dapat di-resolve (respons tidak valid).")
+                else:
+                    raise HTTPException(status_code=400, detail="Redirect chain short URL terlalu panjang.")
         except httpx.HTTPError:
             raise HTTPException(status_code=502, detail="Gagal menghubungi Google Maps untuk resolve URL. Coba lagi nanti.")
-        if not _is_google_maps_host(urlparse(resolved).netloc.lower().split(":")[0]):
-            raise HTTPException(status_code=400, detail="Short URL tidak mengarah ke Google Maps yang valid.")
 
     place_id = _extract_place_id(resolved) or _extract_place_id(url)
     headers = {"X-Goog-Api-Key": GOOGLE_MAPS_API_KEY, "X-Goog-FieldMask": "id,displayName,formattedAddress"}
@@ -343,6 +363,18 @@ async def verify_google_business(google_maps_url: str) -> dict:
             places = ts.json().get("places", [])
             if not places:
                 raise HTTPException(status_code=404, detail="Bisnis tidak ditemukan di Google. Periksa kembali Google Maps URL.")
+            if len(places) > 1:
+                # Gagal secara aman saat ambigu — jangan pernah memilih bisnis secara diam-diam.
+                candidates = []
+                for p in places[:3]:
+                    label = (p.get("displayName") or {}).get("text", "?")
+                    addr = p.get("formattedAddress", "")
+                    candidates.append(f"{label} — {addr}" if addr else label)
+                raise HTTPException(
+                    status_code=409,
+                    detail="Hasil verifikasi Google ambigu (beberapa bisnis cocok): " + "; ".join(candidates)
+                    + ". Gunakan URL Google Maps yang spesifik: buka halaman bisnis di Google Maps → Bagikan → salin link.",
+                )
             place_id = places[0]["id"]
         detail = await http.get(f"{GOOGLE_PLACES_BASE}/places/{place_id}", headers=headers)
         if detail.status_code == 404:
@@ -646,6 +678,11 @@ async def perform_activation(card: dict, code: str, body: ActivationInput, desti
 
     now = iso()
     biz_data = sanitize_business_payload(body.business.model_dump(exclude_none=True))
+    # Business = single source of truth: tulis destination ke field bisnis yang sesuai
+    # agar snapshot card.destination_url dan data Business selalu konsisten sejak aktivasi.
+    biz_field = DEST_TO_BIZ_FIELD.get(body.destination_type)
+    if biz_field and not biz_data.get(biz_field):
+        biz_data[biz_field] = destination_url
     if card.get("business_id"):
         await db.businesses.update_one({"_id": card["business_id"]}, {"$set": {**biz_data, "updated_at": now}})
         business_id = card["business_id"]
