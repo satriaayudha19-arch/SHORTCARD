@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Plus, Search, Loader2, Pencil } from "lucide-react";
+import { Plus, Search, Loader2, Pencil, ShieldCheck, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import api, { formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 
-const EMPTY = { name: "", owner_name: "", whatsapp: "", email: "", address: "", google_review_url: "", instagram_url: "" };
+const EMPTY = {
+    name: "", owner_name: "", whatsapp: "", email: "", address: "",
+    google_maps_url: "", google_review_url: "",
+    instagram_url: "", tiktok_url: "", facebook_url: "", youtube_url: "", whatsapp_url: "",
+};
 
 export default function BusinessesPage() {
     const [data, setData] = useState(null);
@@ -19,6 +23,15 @@ export default function BusinessesPage() {
     const [editing, setEditing] = useState(null);
     const [form, setForm] = useState(EMPTY);
     const [saving, setSaving] = useState(false);
+    const [verifyState, setVerifyState] = useState("idle"); // idle | loading | success | error
+    const [verifyInfo, setVerifyInfo] = useState(null);
+    const [verifyError, setVerifyError] = useState("");
+
+    const resetVerify = () => {
+        setVerifyState("idle");
+        setVerifyInfo(null);
+        setVerifyError("");
+    };
 
     const load = useCallback(() => {
         const params = new URLSearchParams({ page: String(page), limit: "10" });
@@ -34,6 +47,7 @@ export default function BusinessesPage() {
     const openCreate = () => {
         setEditing(null);
         setForm(EMPTY);
+        resetVerify();
         setDialogOpen(true);
     };
 
@@ -45,9 +59,15 @@ export default function BusinessesPage() {
             whatsapp: b.whatsapp || "",
             email: b.email || "",
             address: b.address || "",
+            google_maps_url: b.google_maps_url || "",
             google_review_url: b.google_review_url || "",
             instagram_url: b.instagram_url || "",
+            tiktok_url: b.tiktok_url || "",
+            facebook_url: b.facebook_url || "",
+            youtube_url: b.youtube_url || "",
+            whatsapp_url: b.whatsapp_url || "",
         });
+        resetVerify();
         setDialogOpen(true);
     };
 
@@ -73,6 +93,36 @@ export default function BusinessesPage() {
 
     const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
 
+    const verifyGoogle = async () => {
+        setVerifyState("loading");
+        setVerifyError("");
+        setVerifyInfo(null);
+        try {
+            const payload = { google_maps_url: form.google_maps_url.trim() };
+            if (editing) payload.business_id = editing.id;
+            else payload.business_name = form.name.trim();
+            const res = await api.post("/admin/businesses/verify-google", payload);
+            setVerifyInfo(res.data);
+            setVerifyState("success");
+            setForm((f) => ({
+                ...f,
+                google_review_url: res.data.google_review_url,
+                name: f.name.trim() || res.data.business_name || f.name,
+            }));
+            if (!editing && res.data.business_id) {
+                const detail = await api.get(`/admin/businesses/${res.data.business_id}`);
+                setEditing(detail.data);
+                toast.success("Bisnis dibuat dengan data Google terverifikasi.");
+            } else {
+                toast.success("Google Business terverifikasi.");
+            }
+            load();
+        } catch (e) {
+            setVerifyError(formatApiError(e));
+            setVerifyState("error");
+        }
+    };
+
     return (
         <div data-testid="admin-businesses-page">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -96,8 +146,66 @@ export default function BusinessesPage() {
                             </div>
                             <div><Label>Email</Label><Input data-testid="business-form-email" type="email" value={form.email} onChange={set("email")} className="mt-2" /></div>
                             <div><Label>Alamat</Label><Input data-testid="business-form-address" value={form.address} onChange={set("address")} className="mt-2" /></div>
-                            <div><Label>Google Review URL</Label><Input data-testid="business-form-google-review" value={form.google_review_url} onChange={set("google_review_url")} placeholder="https://..." className="mt-2" /></div>
-                            <div><Label>Instagram URL</Label><Input data-testid="business-form-instagram" value={form.instagram_url} onChange={set("instagram_url")} placeholder="https://..." className="mt-2" /></div>
+
+                            {/* ENGINE A — Google Business Verification */}
+                            <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-3" data-testid="google-verification-section">
+                                <div className="flex items-center justify-between">
+                                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Google Business</p>
+                                    {editing?.google_verified && verifyState !== "success" && (
+                                        <Badge data-testid="google-verified-badge" className="bg-emerald-100 text-emerald-700 border-emerald-200">Terverifikasi</Badge>
+                                    )}
+                                </div>
+                                <div>
+                                    <Label>Google Maps URL</Label>
+                                    <Input data-testid="business-form-google-maps" value={form.google_maps_url} onChange={set("google_maps_url")} placeholder="https://maps.app.goo.gl/..." className="mt-2" />
+                                </div>
+                                <Button
+                                    type="button"
+                                    variant="outline"
+                                    data-testid="business-verify-google-button"
+                                    onClick={verifyGoogle}
+                                    disabled={verifyState === "loading" || !form.google_maps_url.trim() || (!editing && form.name.trim().length < 2)}
+                                    className="w-full border-blue-300 text-blue-700 hover:bg-blue-50"
+                                >
+                                    {verifyState === "loading" ? (
+                                        <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Memverifikasi Google Business...</>
+                                    ) : (
+                                        <><ShieldCheck className="w-4 h-4 mr-2" /> Verifikasi Google Business</>
+                                    )}
+                                </Button>
+                                {!editing && form.name.trim().length < 2 && (
+                                    <p className="text-xs text-slate-400">Isi Nama Bisnis terlebih dahulu untuk verifikasi.</p>
+                                )}
+                                {verifyState === "success" && verifyInfo && (
+                                    <div data-testid="google-verify-success" className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-xs space-y-1.5">
+                                        <p className="font-bold text-emerald-700 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> Google Business verified</p>
+                                        <p className="text-slate-700"><span className="text-slate-500">Nama:</span> {verifyInfo.business_name}</p>
+                                        {verifyInfo.address && <p className="text-slate-700"><span className="text-slate-500">Alamat:</span> {verifyInfo.address}</p>}
+                                        <p className="font-mono-code text-slate-700 break-all"><span className="text-slate-500 font-sans">Place ID:</span> {verifyInfo.place_id}</p>
+                                        <p className="font-mono-code text-blue-700 break-all">{verifyInfo.google_review_url}</p>
+                                    </div>
+                                )}
+                                {verifyState === "error" && (
+                                    <div data-testid="google-verify-error" className="rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-700">
+                                        Google Business could not be verified. {verifyError}
+                                    </div>
+                                )}
+                                <div>
+                                    <Label>Google Review URL (dibuat otomatis setelah verifikasi)</Label>
+                                    <Input data-testid="business-form-google-review" value={form.google_review_url} readOnly disabled placeholder="Akan terisi otomatis" className="mt-2 bg-slate-100 font-mono-code text-xs" />
+                                </div>
+                            </div>
+
+                            {/* ENGINE B — Social Media Destination Validator (validasi otomatis saat simpan) */}
+                            <div className="rounded-xl border border-slate-200 p-4 space-y-3" data-testid="social-media-section">
+                                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Social Media</p>
+                                <div><Label>Instagram</Label><Input data-testid="business-form-instagram" value={form.instagram_url} onChange={set("instagram_url")} placeholder="https://instagram.com/username" className="mt-2" /></div>
+                                <div><Label>TikTok</Label><Input data-testid="business-form-tiktok" value={form.tiktok_url} onChange={set("tiktok_url")} placeholder="https://tiktok.com/@username" className="mt-2" /></div>
+                                <div><Label>Facebook</Label><Input data-testid="business-form-facebook" value={form.facebook_url} onChange={set("facebook_url")} placeholder="https://facebook.com/namapage" className="mt-2" /></div>
+                                <div><Label>YouTube</Label><Input data-testid="business-form-youtube" value={form.youtube_url} onChange={set("youtube_url")} placeholder="https://youtube.com/@channel" className="mt-2" /></div>
+                                <div><Label>WhatsApp Link</Label><Input data-testid="business-form-whatsapp-url" value={form.whatsapp_url} onChange={set("whatsapp_url")} placeholder="https://wa.me/628xxxxxxxxxx" className="mt-2" /></div>
+                                <p className="text-xs text-slate-400">URL social media divalidasi &amp; dinormalisasi otomatis saat disimpan — tanpa API eksternal.</p>
+                            </div>
                             <Button data-testid="business-form-submit" onClick={save} disabled={saving || form.name.trim().length < 2} className="w-full bg-blue-600 hover:bg-blue-700">
                                 {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Simpan"}
                             </Button>

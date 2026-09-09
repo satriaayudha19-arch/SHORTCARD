@@ -121,10 +121,10 @@ def test_full_card_lifecycle(auth):
     assert body["status"] == "ACTIVE"
     assert f"/r/{code}" in body["public_url"]
 
-    # Redirect ke tujuan awal
+    # Redirect ke tujuan awal (URL social dinormalisasi oleh Engine B)
     res = requests.get(f"{BASE}/r/{code}", allow_redirects=False)
     assert res.status_code == 302
-    assert res.headers["location"] == "https://instagram.com/testlifecycle"
+    assert res.headers["location"] == "https://www.instagram.com/testlifecycle/"
 
     # QR Code harus berisi URL Short Card, bukan URL tujuan
     res = requests.get(f"{BASE}/public/cards/{code}/qr.png")
@@ -140,12 +140,12 @@ def test_full_card_lifecycle(auth):
     # URL kartu sama, redirect kini ke link baru
     res = requests.get(f"{BASE}/r/{code}", allow_redirects=False)
     assert res.status_code == 302
-    assert res.headers["location"] == "https://instagram.com/testlifecycle.baru"
+    assert res.headers["location"] == "https://www.instagram.com/testlifecycle.baru/"
 
     # History tercatat
     res = requests.get(f"{BASE}/admin/cards/{code}", headers=auth)
     history = res.json()["history"]
-    assert any(h["new_url"] == "https://instagram.com/testlifecycle.baru" for h in history)
+    assert any(h["new_url"] == "https://www.instagram.com/testlifecycle.baru/" for h in history)
 
     # Disable: redirect berhenti
     res = requests.post(f"{BASE}/admin/cards/{code}/disable", headers=auth)
@@ -215,3 +215,136 @@ def test_correction_flow(auth):
     res = requests.get(f"{BASE}/admin/cards/{code}", headers=auth)
     history = res.json()["history"]
     assert any(h.get("request_id") == correction_id for h in history)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _create_active_card(auth, dtype, url, biz_name):
+    res = requests.post(f"{BASE}/admin/cards", json={"count": 1}, headers=auth)
+    code = res.json()["codes"][0]
+    res = requests.post(f"{BASE}/admin/cards/{code}/activate", json={
+        "destination_type": dtype, "destination_url": url, "business": {"name": biz_name},
+    }, headers=auth)
+    assert res.status_code == 200, res.text
+    return code
+
+
+def _validate_social(auth, platform, url):
+    return requests.post(f"{BASE}/admin/businesses/validate-social", json={"platform": platform, "url": url}, headers=auth)
+
+
+# ---------------------------------------------------------------------------
+# Engine B — Social Media Destination Validator
+# ---------------------------------------------------------------------------
+def test_instagram_validation(auth):
+    body = _validate_social(auth, "INSTAGRAM", "https://instagram.com/KopiKita").json()
+    assert body["valid"] is True
+    assert body["normalized_url"] == "https://www.instagram.com/KopiKita/"
+    assert _validate_social(auth, "INSTAGRAM", "https://www.instagram.com/kopikita/").json()["valid"] is True
+    assert _validate_social(auth, "INSTAGRAM", "https://example.com/kopikita").json()["valid"] is False
+    assert _validate_social(auth, "INSTAGRAM", "https://instagram.com/p/abc123").json()["valid"] is False
+    assert _validate_social(auth, "INSTAGRAM", "javascript:alert(1)").json()["valid"] is False
+    assert _validate_social(auth, "INSTAGRAM", "http://instagram.com/kopikita").json()["valid"] is False
+
+
+def test_tiktok_validation(auth):
+    assert _validate_social(auth, "TIKTOK", "https://www.tiktok.com/@kopikita").json()["valid"] is True
+    assert _validate_social(auth, "TIKTOK", "https://tiktok.com/@kopikita").json()["normalized_url"] == "https://www.tiktok.com/@kopikita"
+    assert _validate_social(auth, "TIKTOK", "https://example.com/@kopikita").json()["valid"] is False
+    assert _validate_social(auth, "TIKTOK", "https://www.tiktok.com/kopikita").json()["valid"] is False
+
+
+def test_facebook_validation(auth):
+    assert _validate_social(auth, "FACEBOOK", "https://www.facebook.com/kopikita").json()["valid"] is True
+    assert _validate_social(auth, "FACEBOOK", "https://facebook.com/kopikita").json()["normalized_url"] == "https://www.facebook.com/kopikita"
+    assert _validate_social(auth, "FACEBOOK", "https://example.com/kopikita").json()["valid"] is False
+    assert _validate_social(auth, "FACEBOOK", "https://www.facebook.com").json()["valid"] is False
+
+
+def test_youtube_validation(auth):
+    assert _validate_social(auth, "YOUTUBE", "https://youtube.com/@kopikita").json()["valid"] is True
+    channel = "UC" + "x" * 22
+    assert _validate_social(auth, "YOUTUBE", f"https://www.youtube.com/channel/{channel}").json()["valid"] is True
+    assert _validate_social(auth, "YOUTUBE", "https://example.com/@kopikita").json()["valid"] is False
+    assert _validate_social(auth, "YOUTUBE", "https://www.youtube.com/watch?v=abc123").json()["valid"] is False
+    assert _validate_social(auth, "YOUTUBE", "https://youtu.be/abc123").json()["valid"] is False
+
+
+def test_social_card_redirects(auth):
+    """Setiap destination type: Card aktif → redirect ke URL tersimpan (dinormalisasi)."""
+    cases = [
+        ("INSTAGRAM", "https://instagram.com/e2e.ig", "https://www.instagram.com/e2e.ig/"),
+        ("TIKTOK", "https://www.tiktok.com/@e2e.tt", "https://www.tiktok.com/@e2e.tt"),
+        ("FACEBOOK", "https://www.facebook.com/e2efb", "https://www.facebook.com/e2efb"),
+        ("YOUTUBE", "https://youtube.com/@e2eyt", "https://www.youtube.com/@e2eyt"),
+        ("WHATSAPP", "https://wa.me/6281234567890", "https://wa.me/6281234567890"),
+        ("CUSTOM", "https://contoh-website.id/promo", "https://contoh-website.id/promo"),
+    ]
+    for dtype, url, expected in cases:
+        code = _create_active_card(auth, dtype, url, f"E2E {dtype}")
+        res = requests.get(f"{BASE}/r/{code}", allow_redirects=False)
+        assert res.status_code == 302, dtype
+        assert res.headers["location"] == expected, f"{dtype}: {res.headers['location']}"
+
+
+# ---------------------------------------------------------------------------
+# Engine A — Google Business Verification
+# ---------------------------------------------------------------------------
+def test_google_verify_rejects_non_google_url(auth):
+    res = requests.post(f"{BASE}/admin/businesses/verify-google", json={"google_maps_url": "https://example.com/maps"}, headers=auth)
+    assert res.status_code == 400
+
+
+def test_google_verify_requires_api_key(auth):
+    """Tanpa GOOGLE_MAPS_API_KEY: error 503 yang jelas — TIDAK ADA fake success."""
+    res = requests.post(f"{BASE}/admin/businesses/verify-google", json={"google_maps_url": "https://maps.app.goo.gl/HzeHM1gp3wFzWvWJ8"}, headers=auth)
+    if res.status_code == 503:
+        assert "GOOGLE_MAPS_API_KEY" in res.json()["detail"]
+    else:
+        # Jika key sudah dikonfigurasi: harus hasil verifikasi nyata atau error Google yang jelas
+        assert res.status_code in (200, 400, 404, 429, 502)
+        if res.status_code == 200:
+            body = res.json()
+            assert body["verified"] is True
+            assert len(body["place_id"]) > 10
+            assert "placeid=" in body["google_review_url"]
+
+
+def test_fake_place_id_never_accepted(auth):
+    """URL berisi Place ID karangan tidak boleh menghasilkan verified=true."""
+    res = requests.post(
+        f"{BASE}/admin/businesses/verify-google",
+        json={"google_maps_url": "https://www.google.com/maps/place/?q=place_id:ChIJFakePlaceIdKopi123"},
+        headers=auth,
+    )
+    assert res.status_code != 200, "Fake Place ID diterima sebagai valid!"
+    assert res.status_code in (400, 404, 429, 502, 503)
+
+
+# ---------------------------------------------------------------------------
+# Business single source of truth → propagasi ke Card
+# ---------------------------------------------------------------------------
+def test_business_update_propagates_to_cards(auth):
+    code = _create_active_card(auth, "INSTAGRAM", "https://instagram.com/prop.awal", "Biz Propagasi")
+    res = requests.get(f"{BASE}/r/{code}", allow_redirects=False)
+    assert res.headers["location"] == "https://www.instagram.com/prop.awal/"
+    detail = requests.get(f"{BASE}/admin/cards/{code}", headers=auth).json()
+    biz_id = detail["business"]["id"]
+    res = requests.patch(f"{BASE}/admin/businesses/{biz_id}", json={"instagram_url": "https://instagram.com/prop.baru"}, headers=auth)
+    assert res.status_code == 200, res.text
+    assert res.json()["instagram_url"] == "https://www.instagram.com/prop.baru/"
+    res = requests.get(f"{BASE}/r/{code}", allow_redirects=False)
+    assert res.headers["location"] == "https://www.instagram.com/prop.baru/"
+    detail = requests.get(f"{BASE}/admin/cards/{code}", headers=auth).json()
+    assert any(h["new_url"] == "https://www.instagram.com/prop.baru/" for h in detail["history"])
+
+
+def test_business_rejects_foreign_social_domain(auth):
+    res = requests.post(f"{BASE}/admin/businesses", json={"name": "Biz Domain Jahat", "instagram_url": "https://example.com/kopikita"}, headers=auth)
+    assert res.status_code == 400
+
+
+def test_business_rejects_non_google_maps_url(auth):
+    res = requests.post(f"{BASE}/admin/businesses", json={"name": "Biz Maps Palsu", "google_maps_url": "https://example.com/maps"}, headers=auth)
+    assert res.status_code == 400

@@ -8,9 +8,10 @@ import time
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Annotated
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 import bcrypt
+import httpx
 import jwt
 import qrcode
 import qrcode.image.svg
@@ -30,6 +31,7 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 CS_WHATSAPP = os.environ.get("CS_WHATSAPP", "")
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "").lower()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
@@ -47,14 +49,33 @@ DESTINATION_TYPES = ["GOOGLE_REVIEW", "INSTAGRAM", "TIKTOK", "YOUTUBE", "FACEBOO
 CORRECTION_STATUSES = ["PENDING", "REVIEWING", "APPROVED", "REJECTED", "COMPLETED"]
 CARD_CODE_RE = re.compile(r"^SC-\d{4,6}$")
 
-DEST_HOST_RULES = {
-    "GOOGLE_REVIEW": ["google.", "g.co", "g.page"],
-    "INSTAGRAM": ["instagram.com"],
-    "TIKTOK": ["tiktok.com"],
-    "YOUTUBE": ["youtube.com", "youtu.be"],
-    "FACEBOOK": ["facebook.com", "fb.com", "fb.me", "fb.watch"],
-    "WHATSAPP": ["wa.me", "whatsapp.com"],
+# Engine B — Social Media Destination Validator: host whitelist ketat per platform
+SOCIAL_HOSTS = {
+    "INSTAGRAM": {"instagram.com", "www.instagram.com"},
+    "TIKTOK": {"tiktok.com", "www.tiktok.com"},
+    "FACEBOOK": {"facebook.com", "www.facebook.com", "m.facebook.com"},
+    "YOUTUBE": {"youtube.com", "www.youtube.com", "m.youtube.com"},
 }
+
+WHATSAPP_HOSTS = {"wa.me", "whatsapp.com", "www.whatsapp.com", "api.whatsapp.com"}
+GOOGLE_SHORT_HOSTS = {"maps.app.goo.gl", "goo.gl", "g.page", "g.co"}
+
+INSTAGRAM_RESERVED = {"p", "reel", "reels", "explore", "accounts", "stories", "direct", "tv"}
+IG_USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._]{0,29}$")
+TT_HANDLE_RE = re.compile(r"^@[A-Za-z0-9][A-Za-z0-9._]{1,23}$")
+YT_HANDLE_RE = re.compile(r"^@[A-Za-z0-9][A-Za-z0-9._-]{1,29}$")
+YT_CHANNEL_RE = re.compile(r"^UC[A-Za-z0-9_-]{22}$")
+
+# Business adalah single source of truth untuk destination per jenis
+DEST_TO_BIZ_FIELD = {
+    "GOOGLE_REVIEW": "google_review_url",
+    "INSTAGRAM": "instagram_url",
+    "TIKTOK": "tiktok_url",
+    "YOUTUBE": "youtube_url",
+    "FACEBOOK": "facebook_url",
+    "WHATSAPP": "whatsapp_url",
+}
+BIZ_SOCIAL_FIELDS = {v: k for k, v in DEST_TO_BIZ_FIELD.items() if k in SOCIAL_HOSTS}
 
 DEST_LABELS = {
     "GOOGLE_REVIEW": "Google Review",
@@ -100,6 +121,76 @@ def normalize_code(code: str) -> str:
     return code
 
 
+def _host_of(url: str) -> str:
+    return urlparse(url).netloc.lower().split(":")[0]
+
+
+def _is_google_maps_host(host: str) -> bool:
+    return (
+        host in GOOGLE_SHORT_HOSTS
+        or host == "maps.google.com"
+        or host == "google.com"
+        or host.endswith(".google.com")
+        or re.match(r"^(www\.)?google\.[a-z]{2,}(\.[a-z]{2,})?$", host) is not None
+        or host.endswith(".g.co")
+    )
+
+
+def validate_social_destination(platform: str, url: str) -> dict:
+    """Engine B — validasi + normalisasi URL social media. Murni lokal, tanpa API eksternal."""
+    platform = (platform or "").upper()
+    raw = (url or "").strip()
+    if platform not in SOCIAL_HOSTS:
+        return {"platform": platform, "valid": False, "normalized_url": None, "error": "Platform tidak didukung."}
+    if not raw:
+        return {"platform": platform, "valid": False, "normalized_url": None, "error": "URL wajib diisi."}
+    lowered = raw.lower()
+    for scheme in ("javascript:", "data:", "file:", "vbscript:", "blob:"):
+        if lowered.startswith(scheme):
+            return {"platform": platform, "valid": False, "normalized_url": None, "error": "URL tidak aman dan tidak diizinkan."}
+    parsed = urlparse(raw)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return {"platform": platform, "valid": False, "normalized_url": None, "error": "URL harus menggunakan HTTPS yang valid."}
+    host = parsed.netloc.lower().split(":")[0]
+    if host not in SOCIAL_HOSTS[platform]:
+        return {"platform": platform, "valid": False, "normalized_url": None,
+                "error": f"Domain harus domain resmi {DEST_LABELS[platform]} — domain asing ditolak."}
+    segments = [s for s in parsed.path.split("/") if s]
+
+    if platform == "INSTAGRAM":
+        if len(segments) != 1 or not IG_USERNAME_RE.match(segments[0]) or segments[0].lower() in INSTAGRAM_RESERVED:
+            return {"platform": platform, "valid": False, "normalized_url": None,
+                    "error": "Format URL profil Instagram tidak valid. Contoh: https://instagram.com/username"}
+        return {"platform": platform, "valid": True, "normalized_url": f"https://www.instagram.com/{segments[0]}/", "error": None}
+
+    if platform == "TIKTOK":
+        if len(segments) != 1 or not TT_HANDLE_RE.match(segments[0]):
+            return {"platform": platform, "valid": False, "normalized_url": None,
+                    "error": "Format URL profil TikTok tidak valid. Contoh: https://www.tiktok.com/@username"}
+        return {"platform": platform, "valid": True, "normalized_url": f"https://www.tiktok.com/{segments[0]}", "error": None}
+
+    if platform == "FACEBOOK":
+        if not segments:
+            return {"platform": platform, "valid": False, "normalized_url": None,
+                    "error": "URL Facebook harus mengarah ke halaman/profil. Contoh: https://www.facebook.com/namapage"}
+        if segments[0].lower() in {"sharer", "login", "help", "policies", "watch", "events"}:
+            return {"platform": platform, "valid": False, "normalized_url": None,
+                    "error": "Format URL halaman Facebook tidak didukung."}
+        return {"platform": platform, "valid": True, "normalized_url": f"https://www.facebook.com/{'/'.join(segments)}", "error": None}
+
+    if platform == "YOUTUBE":
+        if len(segments) == 1 and YT_HANDLE_RE.match(segments[0]):
+            return {"platform": platform, "valid": True, "normalized_url": f"https://www.youtube.com/{segments[0]}", "error": None}
+        if len(segments) == 2 and segments[0] == "channel" and YT_CHANNEL_RE.match(segments[1]):
+            return {"platform": platform, "valid": True, "normalized_url": f"https://www.youtube.com/channel/{segments[1]}", "error": None}
+        if len(segments) == 2 and segments[0] in ("c", "user"):
+            return {"platform": platform, "valid": True, "normalized_url": f"https://www.youtube.com/{segments[0]}/{segments[1]}", "error": None}
+        return {"platform": platform, "valid": False, "normalized_url": None,
+                "error": "Gunakan URL channel YouTube (@handle atau /channel/UC...). URL video tidak didukung."}
+
+    return {"platform": platform, "valid": False, "normalized_url": None, "error": "Platform tidak didukung."}
+
+
 def validate_destination_url(destination_type: str, url: str) -> str:
     url = (url or "").strip()
     if not url:
@@ -113,15 +204,161 @@ def validate_destination_url(destination_type: str, url: str) -> str:
         raise HTTPException(status_code=400, detail="URL tujuan harus menggunakan HTTPS yang valid.")
     if destination_type not in DESTINATION_TYPES:
         raise HTTPException(status_code=400, detail="Jenis tujuan tidak valid.")
-    hosts = DEST_HOST_RULES.get(destination_type)
-    if hosts:
-        host = parsed.netloc.lower()
-        if not any(rule in host for rule in hosts):
-            raise HTTPException(
-                status_code=400,
-                detail=f"URL tidak sesuai dengan jenis tujuan {DEST_LABELS[destination_type]}.",
+    host = parsed.netloc.lower().split(":")[0]
+    if destination_type in SOCIAL_HOSTS:
+        result = validate_social_destination(destination_type, url)
+        if not result["valid"]:
+            raise HTTPException(status_code=400, detail=result["error"])
+        return result["normalized_url"]
+    if destination_type == "GOOGLE_REVIEW":
+        if not _is_google_maps_host(host):
+            raise HTTPException(status_code=400, detail="URL harus berasal dari Google (Maps / Review).")
+        return url
+    if destination_type == "WHATSAPP":
+        if host not in WHATSAPP_HOSTS:
+            raise HTTPException(status_code=400, detail="URL tidak sesuai dengan jenis tujuan WhatsApp. Gunakan https://wa.me/628xxxxxxxxxx")
+        return url
+    return url  # CUSTOM: HTTPS valid sudah dipastikan di atas
+
+
+def sanitize_business_payload(data: dict) -> dict:
+    """Validasi/normalisasi field URL bisnis (Engine B + pemeriksaan host Google)."""
+    for field, dtype in BIZ_SOCIAL_FIELDS.items():
+        if data.get(field):
+            result = validate_social_destination(dtype, data[field])
+            if not result["valid"]:
+                raise HTTPException(status_code=400, detail=result["error"])
+            data[field] = result["normalized_url"]
+    if data.get("whatsapp_url"):
+        data["whatsapp_url"] = validate_destination_url("WHATSAPP", data["whatsapp_url"])
+    for field in ("google_maps_url", "google_review_url"):
+        if data.get(field):
+            parsed = urlparse(data[field])
+            if parsed.scheme != "https" or not _is_google_maps_host(parsed.netloc.lower().split(":")[0]):
+                raise HTTPException(status_code=400, detail="URL harus berasal dari Google (Maps / Review) dengan HTTPS valid.")
+    return data
+
+
+async def propagate_business_destination(business_id, field: str, new_url, changed_by: str, reason: str):
+    """Business → Card: perubahan URL bisnis terpropagasi ke kartu ACTIVE dengan destination_type terkait."""
+    dtype = BIZ_SOCIAL_FIELDS.get(field) or ("GOOGLE_REVIEW" if field == "google_review_url" else None) or ("WHATSAPP" if field == "whatsapp_url" else None)
+    if not dtype:
+        return
+    now = iso()
+    async for card in db.cards.find({"business_id": business_id, "destination_type": dtype, "status": "ACTIVE"}):
+        if card.get("destination_url") != new_url:
+            await db.cards.update_one({"_id": card["_id"]}, {"$set": {"destination_url": new_url, "updated_at": now}})
+            await db.card_history.insert_one({
+                "card_id": str(card["_id"]),
+                "card_code": card["code"],
+                "old_url": card.get("destination_url"),
+                "new_url": new_url,
+                "changed_by": changed_by,
+                "reason": reason,
+                "request_id": None,
+                "created_at": now,
+            })
+
+
+# ---------------------------------------------------------------------------
+# Engine A — Google Business Verification (Places API resmi, server-side only)
+# ---------------------------------------------------------------------------
+GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1"
+GOOGLE_REVIEW_URL_TEMPLATE = "https://search.google.com/local/writereview?placeid={place_id}"
+
+
+def _extract_place_id(text: str) -> Optional[str]:
+    m = re.search(r"[?&]place_id=([A-Za-z0-9_-]{10,})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"!1s([A-Za-z][A-Za-z0-9_-]{9,})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"!19s([A-Za-z][A-Za-z0-9_-]{9,})", text)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _extract_place_name(text: str) -> Optional[str]:
+    m = re.search(r"/place/([^/@?]+)", text)
+    if m:
+        return unquote(m.group(1)).replace("+", " ")
+    m = re.search(r"[?&]q=([^&]+)", text)
+    if m:
+        return unquote(m.group(1)).replace("+", " ")
+    return None
+
+
+def _handle_google_errors(resp) -> None:
+    if resp.status_code == 200:
+        return
+    if resp.status_code in (401, 403):
+        raise HTTPException(status_code=502, detail="Autentikasi Google API gagal. Periksa konfigurasi GOOGLE_MAPS_API_KEY dan pastikan Places API (New) aktif.")
+    if resp.status_code == 429:
+        raise HTTPException(status_code=429, detail="Kuota Google API terlampaui. Coba lagi nanti.")
+    if resp.status_code == 400:
+        raise HTTPException(status_code=400, detail="Permintaan ke Google Places API tidak valid.")
+    raise HTTPException(status_code=502, detail="Layanan Google sedang bermasalah. Coba lagi nanti.")
+
+
+async def verify_google_business(google_maps_url: str) -> dict:
+    """Google Maps URL → resolve → REAL Place ID (via Places API resmi) → Review URL.
+    TIDAK PERNAH mengembalikan sukses palsu: tanpa API key → error 503 yang jelas."""
+    url = (google_maps_url or "").strip()
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().split(":")[0] if parsed.netloc else ""
+    if parsed.scheme not in ("https", "http") or not host or not _is_google_maps_host(host):
+        raise HTTPException(status_code=400, detail="URL harus berasal dari Google Maps (maps.app.goo.gl atau google.com/maps).")
+
+    if not GOOGLE_MAPS_API_KEY:
+        raise HTTPException(status_code=503, detail="Verifikasi Google belum dapat dilakukan: GOOGLE_MAPS_API_KEY belum dikonfigurasi di server.")
+
+    # Resolve short URL (maps.app.goo.gl) → URL Google Maps penuh. Tanpa HTML scraping.
+    resolved = url
+    if host in GOOGLE_SHORT_HOSTS:
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as http:
+                resp = await http.get(url, headers={"User-Agent": "ShortCard-Verification/1.0"})
+                resolved = str(resp.url)
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Gagal menghubungi Google Maps untuk resolve URL. Coba lagi nanti.")
+        if not _is_google_maps_host(urlparse(resolved).netloc.lower().split(":")[0]):
+            raise HTTPException(status_code=400, detail="Short URL tidak mengarah ke Google Maps yang valid.")
+
+    place_id = _extract_place_id(resolved) or _extract_place_id(url)
+    headers = {"X-Goog-Api-Key": GOOGLE_MAPS_API_KEY, "X-Goog-FieldMask": "id,displayName,formattedAddress"}
+
+    async with httpx.AsyncClient(timeout=15.0) as http:
+        if not place_id:
+            name = _extract_place_name(resolved) or _extract_place_name(url)
+            if not name:
+                raise HTTPException(status_code=400, detail="Tidak dapat menemukan identitas bisnis dari URL tersebut. Gunakan URL halaman bisnis di Google Maps.")
+            ts = await http.post(
+                f"{GOOGLE_PLACES_BASE}/places:searchText",
+                json={"textQuery": name},
+                headers={**headers, "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress"},
             )
-    return url
+            _handle_google_errors(ts)
+            places = ts.json().get("places", [])
+            if not places:
+                raise HTTPException(status_code=404, detail="Bisnis tidak ditemukan di Google. Periksa kembali Google Maps URL.")
+            place_id = places[0]["id"]
+        detail = await http.get(f"{GOOGLE_PLACES_BASE}/places/{place_id}", headers=headers)
+        if detail.status_code == 404:
+            raise HTTPException(status_code=404, detail="Place ID tidak ditemukan di Google. Link mungkin sudah tidak valid.")
+        _handle_google_errors(detail)
+        data = detail.json()
+
+    real_id = data.get("id") or place_id
+    return {
+        "verified": True,
+        "business_name": (data.get("displayName") or {}).get("text", ""),
+        "address": data.get("formattedAddress", ""),
+        "place_id": real_id,
+        "google_maps_url": url,
+        "google_review_url": GOOGLE_REVIEW_URL_TEMPLATE.format(place_id=real_id),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +512,17 @@ class SettingsInput(BaseModel):
     cs_whatsapp: str = Field(min_length=6, max_length=30)
 
 
+class GoogleVerifyInput(BaseModel):
+    google_maps_url: str
+    business_id: Optional[str] = None
+    business_name: Optional[str] = None  # jika diisi tanpa business_id → bisnis baru dibuat dengan data terverifikasi
+
+
+class SocialValidateInput(BaseModel):
+    platform: str
+    url: str
+
+
 # ---------------------------------------------------------------------------
 # App & routers
 # ---------------------------------------------------------------------------
@@ -397,7 +645,7 @@ async def perform_activation(card: dict, code: str, body: ActivationInput, desti
         raise HTTPException(status_code=400, detail="Ukuran logo terlalu besar (maks 350KB).")
 
     now = iso()
-    biz_data = body.business.model_dump(exclude_none=True)
+    biz_data = sanitize_business_payload(body.business.model_dump(exclude_none=True))
     if card.get("business_id"):
         await db.businesses.update_one({"_id": card["business_id"]}, {"$set": {**biz_data, "updated_at": now}})
         business_id = card["business_id"]
@@ -719,7 +967,7 @@ async def list_businesses(
 @api_router.post("/admin/businesses")
 async def create_business(body: BusinessInput, admin: dict = Depends(get_current_admin)):
     now = iso()
-    doc = body.model_dump(exclude_none=True)
+    doc = sanitize_business_payload(body.model_dump(exclude_none=True))
     doc.update({"created_at": now, "updated_at": now})
     result = await db.businesses.insert_one(doc)
     created = {k: v for k, v in doc.items() if k != "_id"}
@@ -743,10 +991,48 @@ async def update_business(business_id: str, body: BusinessUpdateInput, admin: di
     business = await db.businesses.find_one({"_id": ObjectId(business_id)})
     if not business:
         raise HTTPException(status_code=404, detail="Bisnis tidak ditemukan.")
-    updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
+    updates = sanitize_business_payload({k: v for k, v in body.model_dump(exclude_none=True).items()})
+    if updates.get("google_maps_url") and updates["google_maps_url"] != business.get("google_maps_url"):
+        updates["google_verified"] = False  # URL Maps berubah → wajib verifikasi ulang
     updates["updated_at"] = iso()
     await db.businesses.update_one({"_id": business["_id"]}, {"$set": updates})
+    for field in list(BIZ_SOCIAL_FIELDS.keys()) + ["whatsapp_url", "google_review_url"]:
+        if field in updates and updates[field] != business.get(field):
+            await propagate_business_destination(business["_id"], field, updates[field], admin["email"], "URL bisnis diperbarui oleh admin")
     return pub(await db.businesses.find_one({"_id": business["_id"]}))
+
+
+@api_router.post("/admin/businesses/verify-google")
+async def verify_google(body: GoogleVerifyInput, admin: dict = Depends(get_current_admin)):
+    """Engine A — verifikasi Google Business via Places API resmi. Opsional: simpan ke Business."""
+    result = await verify_google_business(body.google_maps_url)
+    now = iso()
+    verified_fields = {
+        "google_maps_url": body.google_maps_url.strip(),
+        "google_place_id": result["place_id"],
+        "google_review_url": result["google_review_url"],
+        "google_verified": True,
+        "google_verified_at": now,
+        "updated_at": now,
+    }
+    if body.business_id:
+        business = await db.businesses.find_one({"_id": ObjectId(body.business_id)})
+        if not business:
+            raise HTTPException(status_code=404, detail="Bisnis tidak ditemukan.")
+        await db.businesses.update_one({"_id": business["_id"]}, {"$set": verified_fields})
+        await propagate_business_destination(business["_id"], "google_review_url", result["google_review_url"], admin["email"], "Google Business terverifikasi")
+        result["business_id"] = body.business_id
+    elif body.business_name:
+        doc = {"name": body.business_name.strip(), **verified_fields, "created_at": now}
+        created = await db.businesses.insert_one(doc)
+        result["business_id"] = str(created.inserted_id)
+    return result
+
+
+@api_router.post("/admin/businesses/validate-social")
+async def validate_social(body: SocialValidateInput, admin: dict = Depends(get_current_admin)):
+    """Engine B — validasi/normalisasi URL social media (tanpa API eksternal)."""
+    return validate_social_destination(body.platform, body.url)
 
 
 # ---------------------------- ADMIN: CORRECTIONS ----------------------------
@@ -898,9 +1184,8 @@ async def seed_demo():
         "whatsapp": "6281234567890",
         "email": "demo@kopidemo.id",
         "address": "Jl. Contoh No. 1, Jakarta",
-        "google_maps_url": "https://maps.google.com/?cid=1234567890",
-        "google_review_url": "https://search.google.com/local/writereview?placeid=ChIJDemoPlaceIdKopi",
-        "instagram_url": "https://instagram.com/kopidemo",
+        "instagram_url": "https://www.instagram.com/kopidemo/",
+        "google_verified": False,
         "created_at": now,
         "updated_at": now,
     })
@@ -913,11 +1198,10 @@ async def seed_demo():
         "updated_at": now,
     })
     cards = [
-        {"code": "SC-0001", "status": "ACTIVE", "destination_type": "GOOGLE_REVIEW",
-         "destination_url": "https://search.google.com/local/writereview?placeid=ChIJDemoPlaceIdKopi",
-         "business_id": biz1.inserted_id, "activated_at": now},
+        {"code": "SC-0001", "status": "ACTIVE", "destination_type": "INSTAGRAM",
+         "destination_url": "https://www.instagram.com/kopidemo/", "business_id": biz1.inserted_id, "activated_at": now},
         {"code": "SC-0002", "status": "ACTIVE", "destination_type": "INSTAGRAM",
-         "destination_url": "https://instagram.com/kopidemo", "business_id": biz1.inserted_id, "activated_at": now},
+         "destination_url": "https://www.instagram.com/kopidemo/", "business_id": biz1.inserted_id, "activated_at": now},
         {"code": "SC-0003", "status": "ASSIGNED", "destination_type": None, "destination_url": None,
          "business_id": biz2.inserted_id, "activated_at": None},
         {"code": "SC-0004", "status": "UNASSIGNED", "destination_type": None, "destination_url": None,
@@ -936,8 +1220,8 @@ async def seed_demo():
         "card_id": str(sc2["_id"]),
         "card_code": "SC-0002",
         "business_name": "Kopi Demo",
-        "old_url": "https://instagram.com/kopidemo",
-        "new_url": "https://instagram.com/kopidemo.official",
+        "old_url": "https://www.instagram.com/kopidemo/",
+        "new_url": "https://www.instagram.com/kopidemo.official/",
         "reason": "Akun Instagram bisnis berpindah ke handle baru.",
         "requester_name": "Demo Owner",
         "requester_phone": "6281234567890",
@@ -952,7 +1236,7 @@ async def seed_demo():
         "card_id": str(sc2["_id"]),
         "card_code": "SC-0002",
         "old_url": None,
-        "new_url": "https://instagram.com/kopidemo",
+        "new_url": "https://www.instagram.com/kopidemo/",
         "changed_by": "customer_activation",
         "reason": "Aktivasi kartu oleh pelanggan",
         "request_id": None,

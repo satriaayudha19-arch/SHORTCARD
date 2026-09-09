@@ -66,7 +66,34 @@ kapan saja tanpa mengganti kartu/QR/NFC → fitur **Lifetime Garansi Link**. Tar
   anti-hijack (aktivasi anonim → 401/404, kartu ACTIVE → 409)
 - Validasi URL per destination type + blokir scheme berbahaya; HTTPS only
 
-## Update 7 Sep 2026 — Model Bisnis Kartu Fisik (QR pre-printed + NFC NTAG213 blank)
+## Update 8 Sep 2026 — Google Business Verification Engine + Social Media Destination Validator
+- **Engine A (Google)**: `verify_google_business()` di server.py — validasi host Google Maps →
+  resolve short URL `maps.app.goo.gl` via HTTP redirect (tanpa scraping) → ekstrak Place ID dari URL
+  (`place_id=`, `!1s`, `!19s`) atau Text Search by name → verifikasi via **Places API (New)**
+  (`GET /v1/places/{id}`, fieldMask id/displayName/formattedAddress) → generate
+  `search.google.com/local/writereview?placeid=<REAL_ID>`. Tanpa `GOOGLE_MAPS_API_KEY` → **503 error jelas,
+  tidak ada fake success**. Error dibedakan: 400 invalid URL, 404 place not found, 429 quota, 502 auth/service.
+  Endpoint: `POST /api/admin/businesses/verify-google` (admin; opsional `business_id` simpan+propagasi,
+  atau `business_name` untuk membuat bisnis baru dengan data terverifikasi).
+- **Engine B (Social)**: `validate_social_destination()` — whitelist host ketat per platform
+  (Instagram/TikTok/Facebook/YouTube), validasi format profile/channel (IG username, TikTok @handle,
+  FB page, YT @handle|/channel/UC…|/c/|/user/), normalisasi ke `https://www.<domain>/...`.
+  Murni lokal — tanpa API eksternal. Endpoint: `POST /api/admin/businesses/validate-social`.
+- **Business = single source of truth**: `google_place_id`, `google_verified`, `google_verified_at`
+  ditambahkan (non-destruktif). `propagate_business_destination()` — perubahan URL bisnis
+  (social/WA/google_review) otomatis terpropagasi ke kartu ACTIVE dengan destination_type terkait
+  + tercatat di card_history. Redirect tetap pakai `card.destination_url` (cepat, tanpa API call saat scan).
+- **Validasi diperketat**: host exact-match (menutup celah `google.evil.com`), whatsapp host whitelist,
+  youtu.be ditolak (bukan channel). Social divalidasi di create/update business & aktivasi.
+- **No-fake-data**: seed dibersihkan dari `ChIJDemoPlaceIdKopi`; DB produksi-preview dibersihkan
+  (SC-0001 → INSTAGRAM kopidemo + history cleanup).
+- **UI**: form bisnis punya section "Google Business" (tombol Verifikasi + state loading/success/error +
+  Place ID & review URL) dan section "Social Media" (IG/TikTok/FB/YT/WA, validasi otomatis saat simpan).
+- **Konfigurasi tersisa**: isi `GOOGLE_MAPS_API_KEY` di backend/.env (Places API (New) aktif di
+  Google Cloud Console + billing) lalu restart backend. Sampai saat itu verifikasi Google mengembalikan
+  503 yang jelas — fitur lain tidak terpengaruh.
+- Tests: 22/22 lulus (termasuk validator per platform, redirect per destination type, propagasi
+  Business→Card, penolakan fake Place ID, Google 503 tanpa key).
 - **Aktivasi menjadi operator-only**: halaman `/activate` diproteksi auth (redirect ke `/admin/login`,
   kembali ke `/activate` setelah login). Endpoint pindah ke `POST /api/admin/cards/{code}/activate`
   (JWT wajib); endpoint publik lama dihapus (404).
